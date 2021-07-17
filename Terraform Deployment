@@ -1,0 +1,199 @@
+# Configure the Azure provider
+terraform {
+  required_providers {
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "~> 2.65"
+    }
+  }
+
+  required_version = ">= 0.14.9"
+}
+
+provider "azurerm" {
+  features {}
+}
+
+resource "azurerm_resource_group" "mainode-rg" {
+  name     = "${var.generic}-RG"
+  location = var.location
+  tags     = var.general_tags
+}
+
+# Create a virtual network
+resource "azurerm_virtual_network" "mainode-VNET" {
+  name                = "${var.generic}-VNET"
+  address_space       = var.vnet_address_space
+  location            = azurerm_resource_group.mainode-rg.location
+  resource_group_name = azurerm_resource_group.mainode-rg.name
+}
+
+# Create subnets
+resource "azurerm_subnet" "def-sub" {
+  name                 = "${var.generic}-def-sub"
+  resource_group_name  = azurerm_resource_group.mainode-rg.name
+  virtual_network_name = azurerm_virtual_network.mainode-VNET.name
+  address_prefixes     = var.subnet_cidr_block1
+}
+
+resource "azurerm_subnet" "GW-sub" {
+  name                 = "GatewaySubnet"
+  resource_group_name  = azurerm_resource_group.mainode-rg.name
+  virtual_network_name = azurerm_virtual_network.mainode-VNET.name
+  address_prefixes     = var.subnet_cidr_block2
+}
+
+resource "azurerm_subnet" "AppGWsub" {
+  name                 = "AppGWSubnet"
+  resource_group_name  = azurerm_resource_group.mainode-rg.name
+  virtual_network_name = azurerm_virtual_network.mainode-VNET.name
+  address_prefixes     = var.subnet_cidr_block3
+}
+
+resource "azurerm_subnet" "xtra" {
+  name                 = "${var.generic}-xtra-subnet"
+  resource_group_name  = azurerm_resource_group.mainode-rg.name
+  virtual_network_name = azurerm_virtual_network.mainode-VNET.name
+  address_prefixes     = var.subnet_cidr_block4
+}
+
+#temporary variable
+locals {
+  instance_count = 2
+}
+
+#Create PIP
+resource "azurerm_public_ip" "LBpip" {
+  name                = "${var.generic}LB-pip"
+  resource_group_name = azurerm_resource_group.mainode-rg.name
+  location            = azurerm_resource_group.mainode-rg.location
+  allocation_method   = "Dynamic"
+}
+
+#Create NICs
+resource "azurerm_network_interface" "Nick" {
+  count               = local.instance_count
+  name                = "${var.generic}-nic${count.index}"
+  resource_group_name = azurerm_resource_group.mainode-rg.name
+  location            = azurerm_resource_group.mainode-rg.location
+
+  ip_configuration {
+    name                          = "primary"
+    subnet_id                     = azurerm_subnet.def-sub.id
+    private_ip_address_allocation = "Dynamic"
+  }
+}
+
+#Create availability set so they can both be added to same BE pool
+resource "azurerm_availability_set" "avset" {
+  name                         = "${var.generic}avset"
+  location                     = azurerm_resource_group.mainode-rg.location
+  resource_group_name          = azurerm_resource_group.mainode-rg.name
+  platform_fault_domain_count  = 2
+  platform_update_domain_count = 2
+  managed                      = true
+}
+
+#Create NSG to allow reachability on SSH port
+resource "azurerm_network_security_group" "webserver" {
+  name                = "tls_webserver"
+  location            = azurerm_resource_group.mainode-rg.location
+  resource_group_name = azurerm_resource_group.mainode-rg.name
+  security_rule {
+    access                     = "Allow"
+    direction                  = "Inbound"
+    name                       = "tls"
+    priority                   = 100
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    source_address_prefix      = "*"
+    destination_port_range     = "22"
+    destination_address_prefix = azurerm_subnet.def-sub.address_prefix
+  }
+}
+
+#Create Basic LB
+resource "azurerm_lb" "Frontend-LB" {
+  name                = "${var.generic}-load-balancer"
+  location            = azurerm_resource_group.mainode-rg.location
+  resource_group_name = azurerm_resource_group.mainode-rg.name
+
+  frontend_ip_configuration {
+    name                 = "PublicIPAddress"
+    public_ip_address_id = azurerm_public_ip.LBpip.id
+  }
+}
+
+#Create its BackEnd pool
+resource "azurerm_lb_backend_address_pool" "BEpool" {
+  loadbalancer_id = azurerm_lb.Frontend-LB.id
+  name            = "BackEndAddressPool-main"
+}
+
+#Create an Inbound NAT rule
+resource "azurerm_lb_nat_rule" "LB-rule" {
+  resource_group_name            = azurerm_resource_group.mainode-rg.name
+  loadbalancer_id                = azurerm_lb.Frontend-LB.id
+  name                           = "SSHaccess"
+  protocol                       = "Tcp"
+  frontend_port                  = 23
+  backend_port                   = 22
+  frontend_ip_configuration_name = azurerm_lb.Frontend-LB.frontend_ip_configuration[0].name
+}
+
+#Associate Backend Pool with target NICs
+resource "azurerm_network_interface_backend_address_pool_association" "example" {
+  count                   = local.instance_count
+  backend_address_pool_id = azurerm_lb_backend_address_pool.BEpool.id
+  ip_configuration_name   = "primary"
+  network_interface_id    = element(azurerm_network_interface.Nick.*.id, count.index)
+}
+
+#Create LB probe
+resource "azurerm_lb_probe" "proab" {
+  resource_group_name = azurerm_resource_group.mainode-rg.name
+  loadbalancer_id     = azurerm_lb.Frontend-LB.id
+  name                = "proabation"
+  port                = 22
+}
+
+#Create LoadBalancing rule
+resource "azurerm_lb_rule" "LB-rool" {
+  resource_group_name            = azurerm_resource_group.mainode-rg.name
+  loadbalancer_id                = azurerm_lb.Frontend-LB.id
+  name                           = "LBRule"
+  protocol                       = "Tcp"
+  frontend_port                  = 22
+  probe_id                       = azurerm_lb_probe.proab.id
+  backend_address_pool_id = azurerm_lb_backend_address_pool.BEpool.id
+  backend_port                   = 22
+  frontend_ip_configuration_name = "PublicIPAddress"
+}
+
+#Create VMs
+resource "azurerm_linux_virtual_machine" "Swillin" {
+  count                           = local.instance_count
+  name                            = "${var.generic}-vm${count.index}"
+  resource_group_name             = azurerm_resource_group.mainode-rg.name
+  location                        = azurerm_resource_group.mainode-rg.location
+  size                            = "Standard_F2"
+  admin_username                  = var.username
+  admin_password                  = var.password
+  availability_set_id             = azurerm_availability_set.avset.id
+  disable_password_authentication = false
+  network_interface_ids = [
+    azurerm_network_interface.Nick[count.index].id,
+  ]
+
+  source_image_reference {
+    publisher = "Canonical"
+    offer     = "UbuntuServer"
+    sku       = "18.04-LTS"
+    version   = "latest"
+  }
+
+  os_disk {
+    storage_account_type = "Standard_LRS"
+    caching              = "ReadWrite"
+  }
+}
