@@ -1,0 +1,78 @@
+variable "generic" {
+  description = "generic name for all resources in this RG"
+  type        = string
+  default     = "Mainode"
+}
+
+variable "location" {
+  description = "location for all resources in this RG"
+  type        = string
+  default     = "Switzerland North"
+}
+
+variable "general_tags" {
+  description = "tags for all resources in this RG"
+  type        = map(string)
+  default = {
+    Class = "DevOps"
+    Cloud = "AzureResource"
+  }
+}
+
+variable "vnet_address_space" {
+  description = "specified VNET's address space"
+  type        = list(string)
+  default     = ["10.149.0.0/16"]
+}
+
+#variable "private_subnet_cidr_blocks" {
+#description = "subnet address spaces provision for VNET"
+#type        = list(string)
+#default = [
+#"10.149.0.0/24",
+#"10.149.1.0/24",
+#"10.149.2.0/24",
+#"10.149.3.0/24",
+#"10.149.4.0/24",
+#"10.149.5.0/24",
+#"10.149.6.0/24",
+#"10.149.7.0/24",
+#"10.149.8.0/24",
+#"10.149.9.0/24",
+#]
+
+variable "subnet_cidr_block1" {
+  description = "subnet address spaces provision for VNET"
+  type        = list(string)
+  default     = ["10.149.0.0/24"]
+}
+
+variable "subnet_cidr_block2" {
+  description = "subnet address spaces provision for VNET"
+  type        = list(string)
+  default     = ["10.149.1.0/24"]
+}
+
+variable "subnet_cidr_block3" {
+  description = "subnet address spaces provision for VNET"
+  type        = list(string)
+  default     = ["10.149.2.0/24"]
+}
+
+variable "subnet_cidr_block4" {
+  description = "subnet address spaces provision for VNET"
+  type        = list(string)
+  default     = ["10.149.3.0/24"]
+}
+
+variable "username" {
+  description = "admin username"
+  type        = string
+  sensitive   = true
+}
+
+variable "password" {
+  description = "admin password"
+  type        = string
+  sensitive   = true
+}
